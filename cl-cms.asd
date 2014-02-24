@@ -9,6 +9,7 @@
                :cl-json
                :ironclad
                :babel
+               :marshal
                :local-time
                :cl-utilities)
   :components ((:file "package")

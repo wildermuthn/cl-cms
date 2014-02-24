@@ -5,10 +5,12 @@
 (defvar *server*) 
 (defvar *logs* nil) 
 (defvar *id* 0)
-(defparameter *nodes* '())
-(defparameter *edges* (make-hash-table))
-(defparameter *usernames* (make-hash-table :test 'equal))
-
+(defvar *node-version* 0)
+(defvar *edge-version* 0)
+(defparameter *sample* '())
+(defvar *nodes* '())
+(defvar *edges* (make-hash-table))
+(defvar *usernames* (make-hash-table :test 'equal))
 ;; Utilities
 
 (defmacro mklist (x)
@@ -20,6 +22,62 @@
 
 ;; Node Utitilies
 
+(defmacro backup-type (type)
+  (let (
+        (type-string (string-upcase (concatenate 'string (symbol-name type) "s"))) 
+        (variable-symbol (intern (string-upcase (concatenate 'string "*" (symbol-name type) "s*"))))
+        (version-symbol (intern (string-upcase (concatenate 'string "*" (symbol-name type) "-version*")))))
+    `(backup-to-disk ,type-string ,variable-symbol ,version-symbol)))
+;; (backup-type node)
+
+(defmacro get-version (x)
+  `(incf ,x)))
+; (get-version *node-version*)
+; (get-version *edge-version*)
+ 
+(defmacro backup-to-disk (file-name data type)
+  (let ((file-name (string-downcase file-name)))
+  `(progn
+    (with-open-file (stream (concatenate 'string "/srv/logs/" ,file-name "-v" (write-to-string (get-version ,type)) ".db") :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (print (ms:marshal ,data) stream)))))
+;; (backup-to-disk "nodes" *nodes* *node-version*)
+;; (backup-type node)
+;; (backup-type edge)
+
+(defmacro restore-type (type &optional id)
+   (let* ((type-string (string-downcase (concatenate 'string (symbol-name type) "s"))) 
+          (version-symbol (intern (string-upcase (concatenate 'string "*" (symbol-name type) "-version*")))))
+     `(progn
+        (if (not ,id)
+            (restore-from-disk ,type-string ,version-symbol)
+            (restore-from-disk ,type-string ,id)))))
+;; (restore-type node)
+;; (restore-type edge)
+;; (restore-type edge 1)
+
+(defun restore-from-disk (file-name id)
+  (with-open-file (s (concatenate 'string "/srv/logs/" file-name "-v" (write-to-string id) ".db"))
+    (loop with eof = (list nil)
+                        for form = (read s nil eof)
+                        until (eq form eof)
+                        collect form into forms
+                        counting t into form-count
+                        finally (return (apply #'ms:unmarshal (values forms form-count))))))
+;; (setf *sample-nodes* (restore-from-disk "nodes" 16))
+;; (setf *sample-nodes* (restore-from-disk "nodes"))
+
+(defun save-data ()
+  (progn
+    (backup-type node)
+    (backup-type edge)))
+; (save-data)
+
+(defun restore-data ()
+  (progn
+    (setf *nodes* (restore-type node))
+    (setf *edges* (restore-type edge))))
+; (restore-data) 
+    
 (defun reset-users ()
   (progn 
     (setq *usernames* (make-hash-table :test 'equal))))
@@ -68,7 +126,7 @@
   (progn
     (setf *nodes* (remove (assoc id *nodes*) *nodes*))
     ""))
-; (delete-node 16)
+; (delete-node 8)
 
 (defun save-node (id lst)
   (let ((created-date (get-node-property id :created-date)))
