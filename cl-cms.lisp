@@ -7,6 +7,7 @@
 (defvar *id* 0)
 (defvar *node-version* 0)
 (defvar *edge-version* 0)
+(defvar *username-version* 0)
 (defparameter *sample* '())
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
@@ -31,9 +32,10 @@
 ;; (backup-type node)
 
 (defmacro get-version (x)
-  `(incf ,x)))
+  `(incf ,x))
 ; (get-version *node-version*)
 ; (get-version *edge-version*)
+; (get-version *usernames-version*)
  
 (defmacro backup-to-disk (file-name data type)
   (let ((file-name (string-downcase file-name)))
@@ -42,6 +44,7 @@
       (print (ms:marshal ,data) stream)))))
 ;; (backup-to-disk "nodes" *nodes* *node-version*)
 ;; (backup-type node)
+;; (backup-type username)
 ;; (backup-type edge)
 
 (defmacro restore-type (type &optional id)
@@ -53,6 +56,7 @@
             (restore-from-disk ,type-string ,id)))))
 ;; (restore-type node)
 ;; (restore-type edge)
+;; (restore-type username)
 ;; (restore-type edge 1)
 
 (defun restore-from-disk (file-name id)
@@ -69,25 +73,30 @@
 (defun save-data ()
   (progn
     (backup-type node)
+    (backup-type username)
     (backup-type edge)))
 ; (save-data)
 
 (defun restore-data ()
   (progn
     (setf *nodes* (restore-type node))
+    (setf *usernames* (restore-type username))
     (setf *edges* (restore-type edge))))
 ; (restore-data) 
     
 (defun reset-users ()
   (progn 
+    (setf *username-version* 0)
     (setq *usernames* (make-hash-table :test 'equal))))
 
 (defun reset-edges ()
   (progn 
+    (setf *edge-version* 0)
     (setq *edges* (make-hash-table))))
 
 (defun reset-nodes ()
   (progn 
+    (setf *node-version* 0)
     (setf *id* 0)
     (setq *nodes* '())))
 
@@ -287,16 +296,33 @@
 ;; (check-user-password "not listed" "fun")
 ;; (check-user-password "nate" "fun")
 
+(defun plist-to-dotlist (plist)
+  (let ((lst '()))
+    (do ((prop (car plist) (car plist))
+         (value (cadr plist) (cadr plist)))
+        ((not plist) lst)
+        (push (cons prop value) lst)
+        (pop plist)
+        (pop plist))))
+;; (plist-to-dotlist (find-user "nate"))
+
+(defun start-user-session (params user)
+  (progn
+    (hunchentoot:start-session)
+    (setf (hunchentoot:session-value :user) (find-user (getf params :username)))
+    (format *logs* "Started session for user: ~a" (hunchentoot:session-value :user))
+    (encode-json-plist-to-string `(:status "success" :data ,(plist-to-dotlist user)))))
+
 (defun login-user (params)
-  (if 
-    (check-user-password (getf params :username)
-                         (getf params :password))
-    (progn
-      (hunchentoot:start-session)
-      (setf (hunchentoot:session-value :user) (find-user (getf params :username)))
-      (format *logs* "Started session for user: ~a" (hunchentoot:session-value :user))
-      (encode-json-plist-to-string '(:status "success")))
-    (encode-json-plist-to-string '(:status "fail"))))
+  (let ((current-user (find-user (getf params :username))))
+    (cond 
+      ((check-user-password (getf params :username)
+                            (getf params :password))
+       (start-user-session params current-user))
+      ((not current-user)
+       (create-node `(:type "user" :username ,(getf params :username) :password ,(getf params :password)))
+       (start-user-session params (find-user (getf params :username))))
+      (t (encode-json-plist-to-string '(:status "fail"))))))
 ;; (login-user '(:username "nate" :password "fun"))
 
 (defun check-logged-in ()
@@ -305,6 +331,7 @@
     (remf user :password)
     (encode-json-plist-to-string user)))
 ;; (check-logged-in)
+
 
 ;; Server
 
