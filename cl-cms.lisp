@@ -12,7 +12,8 @@
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
 (defvar *usernames* (make-hash-table :test 'equal))
-;; Utilities
+
+;;; Utilities
 
 (defmacro mklist (x)
   `(if (listp ,x) 
@@ -21,7 +22,14 @@
 ; (mklist 1)
 ; (mklist (1 2 3))
 
-;; Node Utitilies
+(defmacro pop2 (x)
+  `(progn 
+     (pop ,x)
+     (pop ,x)))
+; (pop2 '(one two three four))
+
+
+;;; Node Utitilies
 
 (defmacro backup-type (type)
   (let (
@@ -29,7 +37,7 @@
         (variable-symbol (intern (string-upcase (concatenate 'string "*" (symbol-name type) "s*"))))
         (version-symbol (intern (string-upcase (concatenate 'string "*" (symbol-name type) "-version*")))))
     `(backup-to-disk ,type-string ,variable-symbol ,version-symbol)))
-;; (backup-type node)
+; (backup-type node)
 
 (defmacro get-version (x)
   `(incf ,x))
@@ -39,13 +47,11 @@
  
 (defmacro backup-to-disk (file-name data type)
   (let ((file-name (string-downcase file-name)))
-  `(progn
-    (with-open-file (stream (concatenate 'string "/srv/logs/" ,file-name "-v" (write-to-string (get-version ,type)) ".db") :direction :output :if-exists :supersede :if-does-not-exist :create)
-      (print (ms:marshal ,data) stream)))))
-;; (backup-to-disk "nodes" *nodes* *node-version*)
-;; (backup-type node)
-;; (backup-type username)
-;; (backup-type edge)
+    `(cl-store:store ,data (concatenate 'string "/srv/logs/" ,file-name "-v" (write-to-string (get-version ,type)) ".db"))))
+; (backup-to-disk "nodes" *nodes* *node-version*)
+; (backup-type node)
+; (backup-type username)
+; (backup-type edge)
 
 (defmacro restore-type (type &optional id)
    (let* ((type-string (string-downcase (concatenate 'string (symbol-name type) "s"))) 
@@ -54,21 +60,15 @@
         (if (not ,id)
             (restore-from-disk ,type-string ,version-symbol)
             (restore-from-disk ,type-string ,id)))))
-;; (restore-type node)
-;; (restore-type edge)
-;; (restore-type username)
-;; (restore-type edge 1)
+; (restore-type node)
+; (restore-type edge)
+; (restore-type username)
+; (restore-type edge 1)
 
 (defun restore-from-disk (file-name id)
-  (with-open-file (s (concatenate 'string "/srv/logs/" file-name "-v" (write-to-string id) ".db"))
-    (loop with eof = (list nil)
-                        for form = (read s nil eof)
-                        until (eq form eof)
-                        collect form into forms
-                        counting t into form-count
-                        finally (return (apply #'ms:unmarshal (values forms form-count))))))
-;; (setf *sample-nodes* (restore-from-disk "nodes" 16))
-;; (setf *sample-nodes* (restore-from-disk "nodes"))
+  (cl-store:restore (concatenate 'string "/srv/logs/" file-name "-v" (write-to-string id) ".db")))
+; (setf *sample-nodes* (restore-from-disk "nodes" 6))
+; (setf *sample-nodes* (restore-from-disk "nodes"))
 
 (defun save-data ()
   (progn
@@ -146,25 +146,21 @@
 (defun get-nodes (ids)
   (let ((lst '()))
     (dolist (id ids)
-      (push (cadr (assoc id *nodes*)) lst))
+      (let ((node (cadr (assoc id *nodes*))))
+        (unless (not node) (push node lst))))
     lst))
 ; (get-nodes '(1 2 3))
+; (get-nodes '(1 2 4))
 
-(defun get-edges (id)
-  (gethash id *edges*))
-; (get-edges 1)
- 
 (defun get-node (id)
   (progn
     (if (stringp id)
       (setf id (parse-integer id)))
-    (let ((edges (get-edges id))
-          (node (cadr (assoc id *nodes*))))
-      (append node (list :edges edges)))))
-;; (get-node 1)
-;; (get-node 20)
-;; (get-node "14")
-;; (get-node "15")
+    (cadr (assoc id *nodes*))))
+; (get-node 1)
+; (get-node 20)
+; (get-node "14")
+; (get-node "15") ; what
 
 (defun get-type (id)
   (or
@@ -176,7 +172,7 @@
 
 (defun get-node-property (node-id property-name)
   (getf (get-node node-id) property-name))
-;; (get-node-property 1 :type)
+; (get-node-property 1 :type)
 
 (defun view-node (&key type limit id)
   (if (null id)
@@ -190,86 +186,226 @@
               (push (attach-edges (car nodes)) return-nodes)
               (incf c))))))
     (list (list id (get-node id)))))
-;; (view-node :type "user")
-;; (view-node :type "task" :limit -1)
-;; (view-node :type "this is 1 yeah yea" :limit 3)
-;; (view-node :id 5)
+; (view-node :type "user")
+; (view-node :type "project")
+; (view-node :type "task" :limit -1)
+; (view-node :type "this is 1 yeah yea" :limit 3)
+; (view-node :id 5)
 
+(defun node-filter-for-edges (nodes &optional edges)
+  (if (not edges) 
+      nodes
+      (let ((edges (mklist edges))
+            (result '()))
+        (dolist (n nodes)
+          (let* ((n (attach-edges n))
+                 (n-edges (getf (cadr n) :edges)))
+            (if (intersection edges n-edges)
+              (push n result))))
+        result)))
+; (node-filter-for-edges *nodes* '(1))
+; (node-filter-for-edges *nodes* '(5))
+; (node-filter-for-edges *nodes*)
+; (node-filter-for-edges *nodes* '())
+           
+ 
 (defun nodes->list (lst)
   "Removes IDs from list of nodes and returns just lists of nodes"
   (let ((result '()))
     (dolist (i lst)
       (push (cadr i) result))
     result))
-;; (nodes->list (view-node :type "tree" :limit -1))
-;; (nodes->list (view-node :id 5))
+; (nodes->list (view-node :type "tree" :limit -1))
+; (nodes->list (view-node :id 5))
+
+(defun edge->json (lst)
+ (encode-json-plist-to-string lst))
+
+(defun edges->json (lst)
+ (encode-json-plist-to-string lst))
+  
+; (encode-json-to-string (car (car (cdr (car (get-edge->nodes 1))))
+; (edges->json (get-edge->nodes 1))
+; (car (get-edge->nodes 1))
+; (caar (get-edge->nodes 1))
+; (cdar (get-edge->nodes 1))
+; (cdr (get-edge->nodes 1))
 
 (defun nodes->json (lst)
   (let ((return-str "["))
     (dolist (i lst)
       (setf return-str (concatenate 'string return-str (node->json i) ",")))
     (concatenate 'string (string-right-trim "," return-str) "]")))
-;; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
-;; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
+; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
+; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
+; (nodes->json (nodes->list (view-node :id 1)))
 
 (defun node->json (i)
   (encode-json-plist-to-string i))
-;; (node->json (get-node 1))
+; (node->json (get-node 7))
 
-(defun create-edge (from ids &key end)
+;;; Edges
+
+(defun get-edges (id)
+  (gethash id *edges*))
+; (get-edges 1)
+
+(defun get-edge-direction (id direction)
+  (getf (get-edges id) direction))
+; (get-edge-direction 1 :to)
+
+(defun get-edge-direction->types (id direction)
+  (let ((lst (get-edge-direction id direction)))
+    (do ((result '()))
+        ((not lst) result)
+        (unless (member (cadr lst) result :test #'equal) (push (cadr lst) result))
+        (pop2 lst))))
+; (get-edge-direction->types 1 :to)
+
+(defun get-edge-type->ids (id type direction)
+  "Get node ids of all edges for node 'id', filtering for type and direction"
+  (let ((lst (get-edge-direction id direction))
+        (result '()))
+    (do ((x (car lst) (car lst))
+         (y (cadr lst) (cadr lst)))
+        ((not lst) (reverse result))
+        (if (equal y type) (push x result))
+        (pop lst)
+        (pop lst))))
+; (get-edge-type->ids 1 "project" :to)
+; (get-edge-type->ids 1 "project" :from)
+
+(defun get-edge-type->nodes (id direction)
+  (let ((result '()))
+    (dolist (type (get-edge-direction->types id direction))
+      (let ((nodes 
+              (do ((nlst (get-nodes (get-edge-type->ids id type direction)))
+                   (vals '()))
+                  ((not nlst) vals)
+                  (push (plist-to-dotlist (car nlst)) vals)
+                  (pop nlst))))
+      (setf result (append result `(,(intern (string-upcase type) "KEYWORD") . (,nodes))))))
+    result))
+
+; (get-edge-type->nodes 1 :to)
+; (node->json (get-edge-type->nodes 1 :to))
+; (node->json (get-edge-type->nodes 1 :from))
+; (node->json (get-node 11))
+ 
+(defun wrap-json-object (id val)
+  (concatenate 'string "\"" id "\":" val ""))
+; (wrap-json-object "to" (node->json (get-edge-type->nodes 1 :to)))
+
+(defun get-edges->json (id) 
+  (concatenate 'string "{"
+                       (wrap-json-object "to" (node->json (get-edge-type->nodes id :to)))
+                       ","
+                       (wrap-json-object "from" (node->json (get-edge-type->nodes id :from)))
+                       "}"))
+; (get-edges->json 1)
+
+(defun opposite-direction (direction) 
+  (if (equal :from direction)
+      :to
+      :from))
+; (opposite-direction :to)
+; (opposite-direction :from)
+
+(defun plist-number->type (n lst direction)
+  "Get unique list of types associated with id n in a list with two directions, using direction
+   
+   Example: 
+   
+        CL-USER> (plist-number->type 1 '(:to (1 \"task\" 3 \"project\" 1 \"pizza\") :from nil) :to) 
+        (\"task\" \"pizza\")
+  "
+  (let ((lst (getf lst direction)))
+    (do ((result '())
+         (type (getf lst n) (getf lst n)))
+      ((not lst) (mklist result))
+      (unless (or (not type)
+              (member type result :test #'equal))
+        (push type result))
+      (pop lst)
+      (pop lst))))
+
+; (plist-number->type 1 '(:to (1 "task" 3 "project" 1 "pizza") :from nil) :to) 
+; (plist-number->type 1 (:to ( :from)
+; (plist-number->type 2 (gethash 1 *edges*) :from)
+; (plist-number->type 2 (gethash 1 *edges*) :to)
+; (plist-number->type 1 (gethash 2 *edges*) :to)
+
+(defun create-edge (from ids &key end type direction)
+  "Create an edge from node from to node ids (can be a list), with type and direction. Automatically links two-way"
   (progn 
     (setf ids (mklist ids))
     (dolist (to ids)
       (let ((lst (gethash from *edges*)))
         (cond ((not lst)
-               (setf (gethash from *edges*) (list to)))
-              (t (if (not (member to lst)) 
-                   (setf (gethash from *edges*) (append lst (list to)))))))
-      (unless end (create-edge to from :end t)))))
-; (create-edge 1 3)
-; (create-edge 3 4) 
-; (create-edge 6 7) 
-; (create-edge 5 '(7 8 9))
-; (create-edge 10 '(7 8 9))
+               (setf (gethash from *edges*) `(,direction (,to ,type))))
+              (t (unless (member type (plist-number->type to lst direction) :test #'equal)
+                           (setf (getf (gethash from *edges*) direction) 
+                                 (append (getf (gethash from *edges*) direction) (list to type)))))))
+      (unless end (create-edge to from :end t :type type :direction (opposite-direction direction))))))
+; (reset-edges)
+; (format t "hi")
+; (maphash #'print-hash-entry *edges*)
+; (create-edge 2 1 :type "project" :direction :to)
+; (create-edge 2 1 :type "task" :direction :to)
+; (create-edge 1 2 :type "thumb" :direction :to)
+; (create-edge 1 2 :type "project" :direction :to)
+; (create-edge 1 '(2 3 4) :type "project" :direction :to)
+; (create-edge 1 '(2 3 4) :type "project" :direction :to)
 
-(defun delete-edge (froms ids &key end)
-  (progn 
-    (format t "Remove ~a from ~a" ids froms)
-    (setf ids (mklist ids))
-    (setf froms (mklist froms))
-    (dolist (from froms)
+(defun fn-delete-edge (from id &key type direction)
+  "Functional style, returns new list of edge for type and direction"
       (let ((lst (gethash from *edges*)))
         (cond ((listp lst)
-               (setf (gethash from *edges*) (set-difference lst ids))))
-        (unless end (delete-edge ids from :end t))))))
-;; (delete-edge 6 7)
-;; (delete-edge 7 '(10 5 6))
+               (let ((p-list (getf (gethash from *edges*) direction))
+                     (result '()))
+                 (do ((p-id (car p-list) (car p-list))
+                      (p-val (cadr p-list) (cadr p-list)))
+                     ((not p-list) (reverse result))
+                     (if (and (equal p-id id) (equal p-val type))
+                         (progn
+                           (pop p-list)
+                           (pop p-list))
+                         (progn
+                           (push p-id result)
+                           (push p-val result)
+                           (pop p-list)
+                           (pop p-list)))))))))
+; (fn-delete-edge 1 2 :type "project" :direction :to)
+; (opposite-direction :from)
 
-(defun save-edge (from ids)
+(defun n-delete-edge (from id &key type direction end)
+  "Destructive function to delete a piece from an edge"
   (progn
-    (format *logs* "Saving Edge: ~a ~a~%" from ids)
-    (delete-edge from (get-edges from))
-    (create-edge from ids)))
-;; (save-edge 1 2)
-;; (save-edge 1 '(2 3))    
-  
+    (unless (not (getf (gethash from *edges*) direction))
+      (setf (getf (gethash from *edges*) direction) (apply #'fn-delete-edge (list from id :type type :direction direction))))
+    (when (not end)
+      (n-delete-edge id from :type type :direction (opposite-direction direction) :end t))))
+; (n-delete-edge 2 1 :type "project" :direction :to)
+; (n-delete-edge 2 1 :type "task" :direction :to)
+; (n-delete-edge 3 1 :type "project" :direction :to)
+; (n-delete-edge 1 2 :type "project" :direction :from)
+; (n-delete-edge 4 1 :type "project" :direction :from)
 
 (defun print-hash-entry (key value)
       (format t "The value associated with the key ~S is ~S~%" key value))
-;; (maphash #'print-hash-entry *edges*)
-;; (maphash #'print-hash-entry *usernames*)
+; (maphash #'print-hash-entry *edges*)
+; (maphash #'print-hash-entry *usernames*)
          
-
 (defun get-node-edges (edges)
   (get-nodes edges))
-;; (get-node-edges (get-edges 1))
+; (get-node-edges (get-edges 1))
    
 (defun attach-edges (assoc-node)
   (let ((node (cadr assoc-node)))
     (list (car assoc-node) (append node (list :edges (get-edges (getf node :id)))))))
-;; (attach-edges (assoc 1 *nodes*))
+; (attach-edges (assoc 1 *nodes*))
 
-;; User Functions
+;;; User Functions
 
 (defun create-password-hash (password)
   (ironclad:pbkdf2-hash-password-to-combined-string (babel:string-to-octets password)))
@@ -285,16 +421,16 @@
     (if userid 
         (get-node userid)
         nil)))
-;; (find-user "nate")
-;; (find-user "not listed")
+; (find-user "nate")
+; (find-user "not listed")
  
 (defun check-user-password (username password)
   (let ((user (find-user username)))
     (if user
         (check-password-hash password (getf user :password))
         nil)))
-;; (check-user-password "not listed" "fun")
-;; (check-user-password "nate" "fun")
+; (check-user-password "not listed" "fun")
+; (check-user-password "nate" "fun")
 
 (defun plist-to-dotlist (plist)
   (let ((lst '()))
@@ -304,7 +440,7 @@
         (push (cons prop value) lst)
         (pop plist)
         (pop plist))))
-;; (plist-to-dotlist (find-user "nate"))
+; (plist-to-dotlist (find-user "nate"))
 
 (defun start-user-session (params user)
   (progn
@@ -323,17 +459,17 @@
        (create-node `(:type "user" :username ,(getf params :username) :password ,(getf params :password)))
        (start-user-session params (find-user (getf params :username))))
       (t (encode-json-plist-to-string '(:status "fail"))))))
-;; (login-user '(:username "nate" :password "fun"))
+; (login-user '(:username "nate" :password "fun"))
 
 (defun check-logged-in ()
   (let ((user (hunchentoot:session-value :user)))
     (format *logs* "Checking logged in for ~a~%" user)
     (remf user :password)
     (encode-json-plist-to-string user)))
-;; (check-logged-in)
+; (check-logged-in)
 
 
-;; Server
+;;; Server
 
 (defun register-rest-handlers ()
   (progn
@@ -379,18 +515,14 @@
                     (format *logs* "Limit: ~a~%" limit)
                     (format *logs* "id ~a~%" (getf params :id))
                     (if (not (getf params :id)) ; (not (getf '(:ID 5) :id))
-                        (nodes->json (nodes->list (view-node :type (getf params :type) :limit limit)))
+                        (nodes->json (nodes->list (node-filter-for-edges (view-node :type (getf params :type) :limit limit) (getf params :edges))))
                         (nodes->json (nodes->list (view-node :id (getf params :id)))))))
+                        ; (nodes->json (nodes->list (view-node :id 1)))
                 ((equal noun "edge")
-                 (nodes->json (get-node-edges (get-edges (getf params :id)))))))
-      ; (get-edges 5)
-      ; (get-node-edges (get-edges 5))
-      ; (nodes->json (get-node-edges (get-edges 5)))
+                 (get-edges->json (getf params :id)))))
       (if (equal verb "save")
           (cond ((equal noun "node")
-                 (save-node (getf params :id) params))
-                ((equal noun "edge")
-                 (save-edge (getf params :id) (getf params :edges)))))
+                 (save-node (getf params :id) params))))
       (if (equal verb "create")
         (cond ((equal noun "node")
                (progn
@@ -400,25 +532,8 @@
                (progn
                  (format *logs* "Creating edge~%")
                  (create-edge (getf params :id) (getf params :edges)))))))))
-          
-;;    (cond 
-;;      ((equal route "create-organization")
-;;       (apply #'create-organization params)
-;;       "")
-;;      ((equal route "create-project")
-;;       (apply #'create-project params)
-;;       "")
-;;      ((equal route "create-task")
-;;       (apply #'create-task params)
-;;       "")
-;;      ((equal route "create-user")
-;;       (apply #'create-user params)
-;;       "")
-;;      ((equal route "create-comment")
-;;       (apply #'create-comment params)
-;;       ""))))
 
-;; Server io utilities 
+;;; Server io utilities 
 
 (defun send-json (x)
     (encode-json-alist-to-string x))
@@ -430,14 +545,7 @@
     (push (cdr i) lst))
   (nreverse lst)))
 
-;; (defun post-to-alist (post-data)
-;;   (let ((lst (list)))
-;;   (dolist (i post-data)
-;;     (push (list (car i) (cdr i)) lst))
-;;   (nreverse lst)))
-
-
-;; Application utilities
+;;; Application utilities
 
 (defun start-hunchentoot (name port) 
   (progn 

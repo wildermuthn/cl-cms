@@ -4,6 +4,6 @@
   (:use :cl
         :hunchentoot 
         :cl-json 
-        :marshal 
+        :cl-store 
         :local-time
         :cl-utilities))
