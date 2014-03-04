@@ -183,7 +183,7 @@
           ((or (eq c limit) (null nodes)) return-nodes)
           (if (equal (get-type (caar nodes)) type)
             (progn
-              (push (attach-edges (car nodes)) return-nodes)
+              (push (car nodes) return-nodes)
               (incf c))))))
     (list (list id (get-node id)))))
 ; (view-node :type "user")
@@ -192,23 +192,6 @@
 ; (view-node :type "this is 1 yeah yea" :limit 3)
 ; (view-node :id 5)
 
-(defun node-filter-for-edges (nodes &optional edges)
-  (if (not edges) 
-      nodes
-      (let ((edges (mklist edges))
-            (result '()))
-        (dolist (n nodes)
-          (let* ((n (attach-edges n))
-                 (n-edges (getf (cadr n) :edges)))
-            (if (intersection edges n-edges)
-              (push n result))))
-        result)))
-; (node-filter-for-edges *nodes* '(1))
-; (node-filter-for-edges *nodes* '(5))
-; (node-filter-for-edges *nodes*)
-; (node-filter-for-edges *nodes* '())
-           
- 
 (defun nodes->list (lst)
   "Removes IDs from list of nodes and returns just lists of nodes"
   (let ((result '()))
@@ -239,6 +222,9 @@
 ; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
 ; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
 ; (nodes->json (nodes->list (view-node :id 1)))
+
+(defun add-edge-to-json (lst edge)
+  (concatenate 'string (subseq lst 0 (- (length (nodes->json (nodes->list (view-node :id 1)))) 2)) ",\"edge\":" edge "]"))
 
 (defun node->json (i)
   (encode-json-plist-to-string i))
@@ -290,7 +276,7 @@
 ; (get-edge-type->nodes 1 :to)
 ; (node->json (get-edge-type->nodes 1 :to))
 ; (node->json (get-edge-type->nodes 1 :from))
-; (node->json (get-node 11))
+; (node->json (get-node 9))
  
 (defun wrap-json-object (id val)
   (concatenate 'string "\"" id "\":" val ""))
@@ -501,6 +487,14 @@
          ((equal id "all") 
           (nodes->json (nodes->list (view-node :type noun :limit -1)))))))))
 
+(defun view-node-request (params)
+  (let ((limit (or (getf params :limit) -1)))
+    (format *logs* "Limit: ~a~%" limit)
+    (format *logs* "id ~a~%" (getf params :id))
+    (if (not (getf params :id)) ; (not (getf '(:ID 5) :id))
+      (nodes->list (view-node :type (getf params :type) :limit limit))
+      (nodes->list (view-node :id (getf params :id))))))
+
 (defun post-request (route params)
    (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
           (verb (car path-elms))
@@ -511,13 +505,10 @@
           (login-user params))
       (if (equal verb "view")
           (cond ((equal noun "node")
-                 (let ((limit (or (getf params :limit) -1)))
-                    (format *logs* "Limit: ~a~%" limit)
-                    (format *logs* "id ~a~%" (getf params :id))
-                    (if (not (getf params :id)) ; (not (getf '(:ID 5) :id))
-                        (nodes->json (nodes->list (node-filter-for-edges (view-node :type (getf params :type) :limit limit) (getf params :edges))))
-                        (nodes->json (nodes->list (view-node :id (getf params :id)))))))
-                        ; (nodes->json (nodes->list (view-node :id 1)))
+                 (nodes->json (view-node-request params)))
+                ((equal noun "node-edge")
+                 (add-edge-to-json (nodes->json (view-node-request params)) (get-edges->json (getf params :id))))
+                 ; (add-edge-to-json (nodes->json (view-node-request '(:id 1))) (get-edges->json 1))
                 ((equal noun "edge")
                  (get-edges->json (getf params :id)))))
       (if (equal verb "save")
@@ -531,7 +522,7 @@
               ((equal noun "edge")
                (progn
                  (format *logs* "Creating edge~%")
-                 (create-edge (getf params :id) (getf params :edges)))))))))
+                 (create-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))))))
 
 ;;; Server io utilities 
 
