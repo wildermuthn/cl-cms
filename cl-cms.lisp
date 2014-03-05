@@ -134,6 +134,7 @@
 (defun delete-node (id)
   (progn
     (setf *nodes* (remove (assoc id *nodes*) *nodes*))
+    (delete-all-edges id)
     ""))
 ; (delete-node 8)
 
@@ -201,19 +202,6 @@
 ; (nodes->list (view-node :type "tree" :limit -1))
 ; (nodes->list (view-node :id 5))
 
-(defun edge->json (lst)
- (encode-json-plist-to-string lst))
-
-(defun edges->json (lst)
- (encode-json-plist-to-string lst))
-  
-; (encode-json-to-string (car (car (cdr (car (get-edge->nodes 1))))
-; (edges->json (get-edge->nodes 1))
-; (car (get-edge->nodes 1))
-; (caar (get-edge->nodes 1))
-; (cdar (get-edge->nodes 1))
-; (cdr (get-edge->nodes 1))
-
 (defun nodes->json (lst)
   (let ((return-str "["))
     (dolist (i lst)
@@ -223,14 +211,15 @@
 ; (nodes->json (nodes->list (view-node :type "project" :limit -1)))
 ; (nodes->json (nodes->list (view-node :id 1)))
 
-(defun add-edge-to-json (lst edge)
-  (concatenate 'string (subseq lst 0 (- (length (nodes->json (nodes->list (view-node :id 1)))) 2)) ",\"edge\":" edge "]"))
-
 (defun node->json (i)
   (encode-json-plist-to-string i))
 ; (node->json (get-node 7))
 
 ;;; Edges
+
+(defun add-edge-to-json (lst edge)
+  (concatenate 'string (subseq lst 0 (- (length lst) 2)) ",\"edge\":" edge "}]"))
+; (add-edge-to-json (nodes->json (view-node-request '(:id 2))) (get-edges->json 2))
 
 (defun get-edges (id)
   (gethash id *edges*))
@@ -374,23 +363,34 @@
 ; (n-delete-edge 2 1 :type "project" :direction :to)
 ; (n-delete-edge 2 1 :type "task" :direction :to)
 ; (n-delete-edge 3 1 :type "project" :direction :to)
-; (n-delete-edge 1 2 :type "project" :direction :from)
+; (n-delete-edge 1 2 :type "task" :direction :from)
 ; (n-delete-edge 4 1 :type "project" :direction :from)
+
+(defun delete-direction-edges (id direction)
+  (let ((edge (getf (get-edges id) direction)))
+    (do ((nid (car edge) (car edge))
+         (type (cadr edge) (cadr edge)))
+        ((not edge))
+        (format t "~a ~a ~a~%" direction nid type)
+        (n-delete-edge id nid :type type :direction direction)
+        (pop2 edge))))  
+; (delete-direction-edges 1 :to)
+; (delete-direction-edges 1 :from)
+; (delete-direction-edges 1 :from)
+; (cadr (getf (get-edges 1) :from))
+    
+(defun delete-all-edges (id)
+  (progn 
+    (delete-direction-edges id :to)
+    (delete-direction-edges id :from)))
+; (delete-all-edges 2)
+; (delete-all-edges 1)
 
 (defun print-hash-entry (key value)
       (format t "The value associated with the key ~S is ~S~%" key value))
 ; (maphash #'print-hash-entry *edges*)
 ; (maphash #'print-hash-entry *usernames*)
          
-(defun get-node-edges (edges)
-  (get-nodes edges))
-; (get-node-edges (get-edges 1))
-   
-(defun attach-edges (assoc-node)
-  (let ((node (cadr assoc-node)))
-    (list (car assoc-node) (append node (list :edges (get-edges (getf node :id)))))))
-; (attach-edges (assoc 1 *nodes*))
-
 ;;; User Functions
 
 (defun create-password-hash (password)
@@ -417,6 +417,7 @@
         nil)))
 ; (check-user-password "not listed" "fun")
 ; (check-user-password "nate" "fun")
+; (check-user-password "nate" "fn")
 
 (defun plist-to-dotlist (plist)
   (let ((lst '()))
@@ -454,6 +455,36 @@
     (encode-json-plist-to-string user)))
 ; (check-logged-in)
 
+;;; Permissions
+
+(defparameter *user-permissions* (make-hash-table :test 'equal))
+; (maphash #'print-hash-entry *user-permission*)
+(setf (gethash "charlie" *user-permissions*) '(view (node edge)))
+(setf (gethash "nate" *user-permissions*) '(create (node edge)
+                                            delete (node edge)
+                                            save (node edge)))
+
+(defun check-permission (user verb noun)
+  (let ((verb (intern (string-upcase verb)))
+        (noun (intern (string-upcase noun))))
+    (if (equal verb 'remove) (setf verb 'delete))
+    (member noun (getf (gethash user *user-permissions*) verb) :test #'equal)))
+; (check-permission "nate" "create" "node")
+; (check-permission "nate" "delete" "node")
+; (check-permission "nate" "delete" "pool")
+; (check-permission "charlie" "delete" "pool")
+
+(defun permission-denied ()
+  (encode-json-plist-to-string '(:status "error" :message "Permission denied")))
+
+(defun check-permissions (verb noun params &rest body)
+  (let ((user (hunchentoot:session-value :user)))
+    (format *logs* "User: ~a~%" (hunchentoot:session-value :user))
+    (cond ((equal verb "login") 
+           (car body)) 
+          ((check-permission (getf user :username) verb noun)
+           (car body))
+          (t (permission-denied)))))
 
 ;;; Server
 
@@ -500,29 +531,38 @@
           (verb (car path-elms))
           (noun (cadr path-elms)))
     (format *logs* "~%POST REQUEST: ~a ~a ~a~%" route params path-elms)
-    (or 
-      (if (equal verb "login")
-          (login-user params))
-      (if (equal verb "view")
-          (cond ((equal noun "node")
-                 (nodes->json (view-node-request params)))
-                ((equal noun "node-edge")
-                 (add-edge-to-json (nodes->json (view-node-request params)) (get-edges->json (getf params :id))))
-                 ; (add-edge-to-json (nodes->json (view-node-request '(:id 1))) (get-edges->json 1))
-                ((equal noun "edge")
-                 (get-edges->json (getf params :id)))))
-      (if (equal verb "save")
-          (cond ((equal noun "node")
-                 (save-node (getf params :id) params))))
-      (if (equal verb "create")
-        (cond ((equal noun "node")
-               (progn
-                 (format *logs* "Creating node~%")
-                 (create-node params)))
-              ((equal noun "edge")
-               (progn
-                 (format *logs* "Creating edge~%")
-                 (create-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))))))
+    (check-permissions verb noun params
+                      (or 
+                        (if (equal verb "login")
+                          (login-user params))
+                        (if (equal verb "view")
+                          (cond ; ((equal noun "node")
+                            ;  (nodes->json (view-node-request params)))
+                            ((equal noun "node")
+                             (let ((node (nodes->json (view-node-request params))))
+                               ;; (nodes->json (view-node-request '(:id 2)))
+                               (if (not (equal node "[{}]"))
+                                 (add-edge-to-json (nodes->json (view-node-request params)) (get-edges->json (getf params :id)))
+                                 "")))
+                            ((equal noun "edge")
+                             (get-edges->json (getf params :id)))))
+                        (if (or (equal verb "delete") (equal verb "remove"))
+                          (cond ((equal noun "node")
+                                 (delete-node (getf params :id)))) 
+                          (cond ((equal noun "edge")
+                                 (n-delete-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))
+                        (if (equal verb "save")
+                          (cond ((equal noun "node")
+                                 (save-node (getf params :id) params))))
+                        (if (equal verb "create")
+                          (cond ((equal noun "node")
+                                 (progn
+                                   (format *logs* "Creating node~%")
+                                   (create-node params)))
+                                ((equal noun "edge")
+                                 (progn
+                                   (format *logs* "Creating edge~%")
+                                   (create-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to)))))))))
 
 ;;; Server io utilities 
 
