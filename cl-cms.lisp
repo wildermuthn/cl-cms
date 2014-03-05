@@ -3,6 +3,7 @@
 (in-package :cl-cms)
 
 (defvar *server*) 
+(defvar *admin-username* "nate") 
 (defvar *logs* nil) 
 (defvar *id* 0)
 (defvar *node-version* 0)
@@ -490,7 +491,7 @@
   (let ((user (hunchentoot:session-value :user)))
     (cond ((not user) 
            (setf user '(:username "anonymous")))
-          ((not (equal (getf user :username) "nate"))
+          ((not (equal (getf user :username) *admin-username*))
            (setf user '(:username "logged-in")))
           (t (setf user '(:username "admin"))))
     (format *logs* "User: ~a~%" user)
