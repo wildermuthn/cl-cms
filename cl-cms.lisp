@@ -123,10 +123,10 @@
                 (setf (gethash username *usernames*) id)
                 (setf lst (append lst (list :password password-hash)))))
           (push (list id (append lst (list :id id) (list :created-date (timestamp-to-unix (now))))) *nodes*)
-          (write-to-string id))
+          (concatenate 'string "{\"id\":" (write-to-string id) "}"))
         (progn
           (push (list id lst) *nodes*)
-          (write-to-string id)))))
+          (concatenate 'string "{\"id\":" (write-to-string id) "}")))))
 ; (create-node '(:type "project" :title "Project Title"))
 ; (create-node '(:type "task" :title "Task Title"))
 ; (create-node '(:type "user" :username "nate" :password "fun"))
@@ -435,7 +435,7 @@
     (hunchentoot:start-session)
     (setf (hunchentoot:session-value :user) (find-user (getf params :username)))
     (format *logs* "Started session for user: ~a" (hunchentoot:session-value :user))
-    (encode-json-plist-to-string `(:status "success" :data ,(plist-to-dotlist user)))))
+    (encode-json-plist-to-string user)))
 
 (defun login-user (params)
   (let ((current-user (find-user (getf params :username))))
@@ -446,7 +446,7 @@
       ((not current-user)
        (create-node `(:type "user" :username ,(getf params :username) :password ,(getf params :password)))
        (start-user-session params (find-user (getf params :username))))
-      (t (encode-json-plist-to-string '(:status "fail"))))))
+      (t (list "error" "Incorrect password")))))
 ; (login-user '(:username "nate" :password "fun"))
 
 (defun check-logged-in ()
@@ -459,36 +459,43 @@
 ;;; Permissions
 
 (defparameter *user-permissions* (make-hash-table :test 'equal))
-(setf (gethash "anonymous" *user-permissions*) '(view (node edge)
+
+(setf (gethash "anonymous" *user-permissions*) '(view (node (all)
+                                                       edge (all))
                                                  create (node ("comment"))))
-(setf (gethash "logged-in" *user-permissions*) '(view (node edge)
-                                                 create (node ("comment" "project") edge)))
-(setf (gethash "admin" *user-permissions*) '(create (node edge)
-                                             delete (node edge)
-                                             save (node edge)))
+
+(setf (gethash "logged-in" *user-permissions*) '(view (node (all) edge (all))
+                                                 create (node ("comment" "project") edge (all))))
+
+(setf (gethash "admin" *user-permissions*) '(view (node (all) edge (all))
+                                             create (node (all) edge (all))
+                                             delete (node (all) edge (all))
+                                             save (node (all) edge (all) )))
 
 (defun check-permission (user verb noun params)
   (let ((verb (intern (string-upcase verb)))
         (noun (intern (string-upcase noun))))
     (if (equal verb 'remove) (setf verb 'delete))
     (let ((perm (member noun (getf (gethash user *user-permissions*) verb) :test #'equal)))
-      (if (listp (getf perm noun)) 
-          (member (getf params :type) (getf perm noun) :test #'equal)
-          t))))
+          (or (member (getf params :type) (getf perm noun) :test #'equal) (equal '(all) (getf perm noun))))))
 
 ; (check-permission "admin" "create" "node" '(:type "project"))
-; (check-permission "anonymous" "create" "node" '(:type "project"))
+; (check-permission "anonymous" "view" "edge" '())
+; (check-permission "anonymous" "create" "edge" '())
+; (check-permission "anonymous" "create" "node" '())
+; (check-permission "anonymous" "view" "node" '(:type "project"))
 ; (check-permission "anonymous" "create" "node" '(:type "comment"))
+; (check-permission "anonymous" "create" "node" '(:type "project"))
 ; (check-permission "logged-in" "create" "node" '(:type "comment"))
+; (check-permission "logged-in" "create" "node" '(:type "project"))
 ; (check-permission "admin" "delete" "node" '())
-; (check-permission "nate" "delete" "pool")
-; (check-permission "charlie" "delete" "pool")
 
 (defun permission-denied ()
-  (encode-json-plist-to-string '(:status "error" :message "Permission denied")))
+  (list "error" "Permission denied"))
 
 (defun check-permissions (verb noun params &rest body)
   (let ((user (hunchentoot:session-value :user)))
+    (format *logs* "User object from hunch: ~a~%" user)
     (cond ((not user) 
            (setf user '(:username "anonymous")))
           ((not (equal (getf user :username) *admin-username*))
@@ -500,6 +507,22 @@
           ((check-permission (getf user :username) verb noun params)
            (car body))
           (t (permission-denied)))))
+
+;;; JSON Utilities
+
+(defun build-standard-json (json-string)
+  (let ((json-list (mklist json-string))
+        (status ""))
+    (cond ((or (equal (car json-list) "success")
+               (equal (car json-list) "fail")
+               (equal (car json-list) "error"))
+           (setf status (car json-list))
+           (setf json-string (cadr json-string))
+           (if (stringp json-string) (setf json-string (concatenate 'string "\"" json-string "\""))))
+          (t (setf status "success")))
+    (cond ((or (not json-string) (equal "" json-string)) 
+           (setf json-string "{}")))
+    (concatenate 'string "{\"status\": \"" status "\", \"data\":" json-string "}")))
 
 ;;; Server
 
@@ -516,8 +539,8 @@
            (get-request (subseq uri (length "/rest/"))))
           ((eq request-type :post)
            (let* ((data-string (hunchentoot:raw-post-data :force-text t)))
-             (post-request (subseq uri (length "/rest/"))
-                           (post-to-plist (json:decode-json-from-string data-string))))))))
+             (build-standard-json (post-request (subseq uri (length "/rest/"))
+                           (post-to-plist (json:decode-json-from-string data-string)))))))))
 
 (defun get-request (route)
   (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
@@ -557,7 +580,7 @@
                              (let ((node (nodes->json (view-node-request params))))
                                ;; (nodes->json (view-node-request '(:id 2)))
                                (if (not (equal node "[{}]"))
-                                 (add-edge-to-json (nodes->json (view-node-request params)) (get-edges->json (getf params :id)))
+                                 (add-edge-to-json node (get-edges->json (getf params :id)))
                                  "")))
                             ((equal noun "edge")
                              (get-edges->json (getf params :id)))))
