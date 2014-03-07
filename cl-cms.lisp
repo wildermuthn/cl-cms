@@ -31,6 +31,15 @@
 
 
 ;;; Node Utitilies
+(defun save-version ()
+  (cl-store:store (list *node-version* *edge-version* *username-version* *id*) "/srv/logs/version.db"))
+; (save-version)
+
+(defun restore-version ()
+  (if (probe-file "/srv/logs/version.db")
+    (let ((lst (cl-store:restore "/srv/logs/version.db")))
+      (setf *node-version* (car lst) *edge-version* (cadr lst) *username-version* (caddr lst) *id* (cadddr lst)))))
+; (restore-version)
 
 (defmacro backup-type (type)
   (let (
@@ -75,37 +84,43 @@
   (progn
     (backup-type node)
     (backup-type username)
-    (backup-type edge)))
+    (backup-type edge)
+    (save-version)))
 ; (save-data)
 
 (defun restore-data ()
-  (progn
-    (setf *nodes* (restore-type node))
-    (setf *usernames* (restore-type username))
-    (setf *edges* (restore-type edge))))
+  (cond ((probe-file "/srv/logs/version.db")
+         (restore-version)
+         (setf *nodes* (restore-type node))
+         (setf *usernames* (restore-type username))
+         (setf *edges* (restore-type edge)))))
 ; (restore-data) 
     
 (defun reset-users ()
-  (progn 
-    (setf *username-version* 0)
-    (setq *usernames* (make-hash-table :test 'equal))))
+    (setq *usernames* (make-hash-table :test 'equal)))
 
 (defun reset-edges ()
-  (progn 
-    (setf *edge-version* 0)
-    (setq *edges* (make-hash-table))))
+    (setq *edges* (make-hash-table)))
 
 (defun reset-nodes ()
-  (progn 
+    (setq *nodes* '()))
+
+(defun reset-versions ()
+  (progn
+    (setf *username-version* 0)
+    (setf *edge-version* 0)
     (setf *node-version* 0)
-    (setf *id* 0)
-    (setq *nodes* '())))
+    (setf *id* 0)))
+; (reset-versions)
 
 (defun reset-all ()
   (progn
+    (reset-versions)
     (reset-users)
     (reset-edges)
     (reset-nodes)))
+; (reset-all)
+
 
 (defun get-id ()
   (setf *id* (1+ *id*)))
@@ -185,14 +200,15 @@
           ((or (eq c limit) (null nodes)) return-nodes)
           (if (equal (get-type (caar nodes)) type)
             (progn
-              (push (car nodes) return-nodes)
+              (push (list (getf (cadar nodes) :id) (alexandria:remove-from-plist (cadar nodes) :password)) return-nodes)
               (incf c))))))
-    (list (list id (get-node id)))))
+    (let ((node (copy-tree (get-node id))))
+      (list (list nil (alexandria:remove-from-plist node :password))))))
 ; (view-node :type "user")
 ; (view-node :type "project")
 ; (view-node :type "task" :limit -1)
 ; (view-node :type "this is 1 yeah yea" :limit 3)
-; (view-node :id 5)
+; (view-node :id 1)
 
 (defun nodes->list (lst)
   "Removes IDs from list of nodes and returns just lists of nodes"
@@ -408,7 +424,7 @@
     (if userid 
         (get-node userid)
         nil)))
-; (find-user "nate")
+; (find-user "chaz")
 ; (find-user "not listed")
  
 (defun check-user-password (username password)
@@ -435,7 +451,7 @@
     (hunchentoot:start-session)
     (setf (hunchentoot:session-value :user) (find-user (getf params :username)))
     (format *logs* "Started session for user: ~a" (hunchentoot:session-value :user))
-    (encode-json-plist-to-string user)))
+    (encode-json-plist-to-string (alexandria:remove-from-plist user :password))))
 
 (defun login-user (params)
   (let ((current-user (find-user (getf params :username))))
@@ -503,9 +519,13 @@
           (t (setf user '(:username "admin"))))
     (format *logs* "User: ~a~%" user)
     (cond ((or (equal verb "login"))
-           (car body)) 
+           (prog1
+             (car body) 
+             (save-data)))
           ((check-permission (getf user :username) verb noun params)
-           (car body))
+           (prog1
+             (car body)
+             (if (not (equal verb "view")) (save-data))))
           (t (permission-denied)))))
 
 ;;; JSON Utilities
@@ -540,7 +560,7 @@
           ((eq request-type :post)
            (let* ((data-string (hunchentoot:raw-post-data :force-text t)))
              (build-standard-json (post-request (subseq uri (length "/rest/"))
-                           (post-to-plist (json:decode-json-from-string data-string)))))))))
+                                                (post-to-plist (json:decode-json-from-string data-string)))))))))
 
 (defun get-request (route)
   (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
@@ -568,8 +588,8 @@
    (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
           (verb (car path-elms))
           (noun (cadr path-elms)))
-    (format *logs* "~%POST REQUEST: ~a ~a ~a~%" route params path-elms)
-    (check-permissions verb noun params
+     (format *logs* "~%POST REQUEST: ~a ~a ~a~%" route params path-elms)
+     (check-permissions verb noun params
                       (or 
                         (if (equal verb "login")
                           (login-user params))
@@ -618,7 +638,7 @@
 
 (defun start-hunchentoot (name port) 
   (progn 
-    (setf *logs* (open (concatenate 'string "/tmp/" name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
+    (setf *logs* (open (concatenate 'string "/srv/logs/" name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
     (setf *server* (hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port port
                                                        :access-log-destination *logs*
                                                        :message-log-destination *logs*)))))
@@ -627,15 +647,14 @@
   (progn
     (close *logs*)  
     (hunchentoot:stop *server*)
-    (stop-logging)))
+    (stop-logging)
+    (save-data)))
 
 (defun stop-logging ()
   (setf (acceptor-access-log-destination *server*) nil))
 
 (defun start-server (name-str port)
   (progn
+    (restore-data)
     (register-rest-handlers)
     (start-hunchentoot name-str port)))
-
-  
-
