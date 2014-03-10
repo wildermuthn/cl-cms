@@ -13,6 +13,7 @@
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
 (defvar *usernames* (make-hash-table :test 'equal))
+(defvar *log-path* "/srv/logs/firstdraft/")
 
 ;;; Utilities
 
@@ -32,12 +33,12 @@
 
 ;;; Node Utitilies
 (defun save-version ()
-  (cl-store:store (list *node-version* *edge-version* *username-version* *id*) "/srv/logs/version.db"))
+  (cl-store:store (list *node-version* *edge-version* *username-version* *id*) (concatenate 'string *log-path* "version.db")))
 ; (save-version)
 
 (defun restore-version ()
-  (if (probe-file "/srv/logs/version.db")
-    (let ((lst (cl-store:restore "/srv/logs/version.db")))
+  (if (probe-file (concatenate 'string *log-path* "version.db"))
+    (let ((lst (cl-store:restore (concatenate 'string *log-path* "version.db"))))
       (setf *node-version* (car lst) *edge-version* (cadr lst) *username-version* (caddr lst) *id* (cadddr lst)))))
 ; (restore-version)
 
@@ -57,7 +58,7 @@
  
 (defmacro backup-to-disk (file-name data type)
   (let ((file-name (string-downcase file-name)))
-    `(cl-store:store ,data (concatenate 'string "/srv/logs/" ,file-name "-v" (write-to-string (get-version ,type)) ".db"))))
+    `(cl-store:store ,data (concatenate 'string *log-path* ,file-name "-v" (write-to-string (get-version ,type)) ".db"))))
 ; (backup-to-disk "nodes" *nodes* *node-version*)
 ; (backup-type node)
 ; (backup-type username)
@@ -76,7 +77,7 @@
 ; (restore-type edge 1)
 
 (defun restore-from-disk (file-name id)
-  (cl-store:restore (concatenate 'string "/srv/logs/" file-name "-v" (write-to-string id) ".db")))
+  (cl-store:restore (concatenate 'string *log-path* file-name "-v" (write-to-string id) ".db")))
 ; (setf *sample-nodes* (restore-from-disk "nodes" 6))
 ; (setf *sample-nodes* (restore-from-disk "nodes"))
 
@@ -89,7 +90,7 @@
 ; (save-data)
 
 (defun restore-data ()
-  (cond ((probe-file "/srv/logs/version.db")
+  (cond ((probe-file (concatenate 'string *log-path* "version.db"))
          (restore-version)
          (setf *nodes* (restore-type node))
          (setf *usernames* (restore-type username))
@@ -638,7 +639,7 @@
 
 (defun start-hunchentoot (name port) 
   (progn 
-    (setf *logs* (open (concatenate 'string "/srv/logs/" name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
+    (setf *logs* (open (concatenate 'string *log-path* name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
     (setf *server* (hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port port
                                                        :access-log-destination *logs*
                                                        :message-log-destination *logs*)))))
