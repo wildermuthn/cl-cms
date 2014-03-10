@@ -9,10 +9,12 @@
 (defvar *node-version* 0)
 (defvar *edge-version* 0)
 (defvar *username-version* 0)
+(defvar *global-hash-version* 0)
 (defparameter *sample* '())
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
 (defvar *usernames* (make-hash-table :test 'equal))
+(defvar *global-hashs* (make-hash-table :test 'equal))
 (defvar *log-path* "/srv/logs/")
 
 ;;; Utilities
@@ -30,6 +32,20 @@
      (pop ,x)))
 ; (pop2 '(one two three four))
 
+;; Global Hash
+
+(defun set-global-hash (name key value) 
+  (cond ((gethash name *global-hashs*)
+         (setf (gethash key (gethash name *global-hashs*)) value))
+        (t (setf (gethash name *global-hashs*) (make-hash-table :test 'equal))
+           (setf (gethash key (gethash name *global-hashs*)) value))))
+
+; (set-global-hash "page" "123" "456")
+; (set-global-hash "page" "abc" "xyz")
+; (set-global-hash "post" "098" "765")
+; (maphash #'print-hash-entry *global-hashs*)
+; (maphash #'print-hash-entry (gethash "page" *global-hashs*))
+; (maphash #'print-hash-entry (gethash "post" *global-hashs*))
 
 ;;; Node Utitilies
 (defun save-version ()
