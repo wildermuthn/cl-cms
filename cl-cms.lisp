@@ -13,7 +13,7 @@
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
 (defvar *usernames* (make-hash-table :test 'equal))
-(defvar *log-path* "/srv/logs/firstdraft/")
+(defvar *log-path* "/srv/logs/")
 
 ;;; Utilities
 
@@ -639,6 +639,8 @@
 
 (defun start-hunchentoot (name port) 
   (progn 
+    (setf *log-path* (concatenate 'string "/srv/logs/" name "/"))
+    (ensure-directories-exist *log-path*)
     (setf *logs* (open (concatenate 'string *log-path* name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
     (setf *server* (hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port port
                                                        :access-log-destination *logs*
