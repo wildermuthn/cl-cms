@@ -506,14 +506,15 @@
                                              save (node (all) edge (all) )))
 
 (defun check-permission (user verb noun params)
-  (let ((verb (intern (string-upcase verb)))
-        (noun (intern (string-upcase noun))))
+  (let ((verb (find-symbol (string-upcase verb) :cl-cms))
+        (noun (find-symbol (string-upcase noun) :cl-cms)))
     (if (equal verb 'remove) (setf verb 'delete))
     (let ((perm (member noun (getf (gethash user *user-permissions*) verb) :test #'equal)))
           (or (member (getf params :type) (getf perm noun) :test #'equal) (equal '(all) (getf perm noun))))))
 
 ; (check-permission "admin" "create" "node" '(:type "project"))
 ; (check-permission "anonymous" "view" "edge" '())
+; (check-permission "anonymous" "view" "node" '())
 ; (check-permission "anonymous" "create" "edge" '())
 ; (check-permission "anonymous" "create" "node" '())
 ; (check-permission "anonymous" "view" "node" '(:type "project"))
@@ -655,8 +656,6 @@
 
 (defun start-hunchentoot (name port) 
   (progn 
-    (setf *log-path* (concatenate 'string "/srv/logs/" name "/"))
-    (ensure-directories-exist *log-path*)
     (setf *logs* (open (concatenate 'string *log-path* name "-lisp-log.txt") :direction :output :if-exists :append :if-does-not-exist :create))
     (setf *server* (hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port port
                                                        :access-log-destination *logs*
@@ -674,6 +673,8 @@
 
 (defun start-server (name-str port)
   (progn
+    (setf *log-path* (concatenate 'string "/srv/logs/" name-str "/"))
+    (ensure-directories-exist *log-path*)
     (restore-data)
     (register-rest-handlers)
     (start-hunchentoot name-str port)))
