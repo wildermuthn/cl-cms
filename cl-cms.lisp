@@ -581,6 +581,8 @@
            (setf json-string "{}")))
     (concatenate 'string "{\"status\": \"" status "\", \"data\":" json-string "}")))
 
+;; (build-standard-json '("success" "nothing"))
+
 ;;; Server
 
 (defun register-rest-handlers ()

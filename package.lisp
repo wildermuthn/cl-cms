@@ -6,4 +6,13 @@
         :cl-json 
         :cl-store 
         :local-time
-        :cl-utilities))
+        :cl-utilities)
+  (:export :start-server
+           :stop-server
+           :get-node
+           :save-node
+           :delete-node
+           :get-edges
+           :create-edge
+           :n-delete-edge))
+           
