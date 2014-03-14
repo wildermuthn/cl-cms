@@ -10,6 +10,7 @@
 (defvar *edge-version* 0)
 (defvar *username-version* 0)
 (defvar *global-hash-version* 0)
+(defvar *operations* '(or))
 (defparameter *sample* '())
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
@@ -512,7 +513,8 @@
 (setf (gethash "anonymous" *user-permissions*) '(view (node (all)
                                                        edge (all)
                                                        hash (all))
-                                                 create (node ("comment") hash (all))))
+                                                 create (node ("comment") hash (all))
+                                                 op (mail (all) echo (all))))
 
 (setf (gethash "logged-in" *user-permissions*) '(view (node (all) 
                                                        edge (all)
@@ -533,6 +535,7 @@
 
 ; (check-permission "admin" "create" "node" '(:type "project"))
 ; (check-permission "anonymous" "view" "edge" '())
+; (check-permission "anonymous" "op" "mail" '())
 ; (check-permission "anonymous" "view" "node" '())
 ; (check-permission "anonymous" "create" "edge" '())
 ; (check-permission "anonymous" "create" "node" '())
@@ -577,11 +580,16 @@
            (setf json-string (cadr json-string))
            (if (stringp json-string) (setf json-string (concatenate 'string "\"" json-string "\""))))
           (t (setf status "success")))
+    (print json-string)
     (cond ((or (not json-string) (equal "" json-string)) 
-           (setf json-string "{}")))
+           (setf json-string "{}"))
+          ((and (not (equal (elt json-string 0) #\")) (not (equal (elt json-string 0) #\{)) (not (equal (elt json-string 0) #\[)))
+           (setf json-string (concatenate 'string "\"" (string json-string) "\""))))
     (concatenate 'string "{\"status\": \"" status "\", \"data\":" json-string "}")))
 
 ;; (build-standard-json '("success" "nothing"))
+;; (elt "\"nothing\"" 0)
+;; (build-standard-json "nothing")
 
 ;;; Server
 
@@ -623,6 +631,29 @@
       (nodes->list (view-node :type (getf params :type) :limit limit))
       (nodes->list (view-node :id (getf params :id))))))
 
+; (setf *operations* '(or)) 
+
+(defun insert-op (op)
+  (setf *operations* (append *operations* op)))
+
+; (insert-op (create-op "mail" "mail"))
+
+(defun create-op (noun &rest body)
+  (insert-op `((if (equal noun ,noun)
+    ,@body))))
+
+; (create-op "mail" "sending mail")
+; (create-op "echo" (getf params :value))
+
+(defmacro get-ops ()
+  *operations*)
+
+; *operations*
+
+; (cond *operations*)
+; (get-ops)
+; (eval)
+
 (defun post-request (route params)
    (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
           (verb (car path-elms))
@@ -632,6 +663,8 @@
                       (or 
                         (if (equal verb "login")
                           (login-user params))
+                        (if (equal verb "op")
+                          (get-ops))
                         (if (equal verb "view")
                           (cond 
                             ((equal noun "node")
