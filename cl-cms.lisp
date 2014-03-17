@@ -10,7 +10,7 @@
 (defvar *edge-version* 0)
 (defvar *username-version* 0)
 (defvar *global-hash-version* 0)
-(defvar *operations* '(or))
+(defvar *operations* '(cond))
 (defparameter *sample* '())
 (defvar *nodes* '())
 (defvar *edges* (make-hash-table))
@@ -31,6 +31,11 @@
   `(progn 
      (pop ,x)
      (pop ,x)))
+
+(defmacro cms-symbol (sym)
+  `(find-symbol (string (intern (string-upcase ,sym) :cl-cms)) :cl-cms))
+; (cms-symbol "fun")
+; (intern (string-upcase "mail") :cl-cms)
 ; (pop2 '(one two three four))
 
 ;; Global Hash
@@ -47,19 +52,48 @@
            (setf (gethash key (gethash db *global-hashs*)) value))
           (t (setf (gethash db *global-hashs*) (make-hash-table :test 'equal))
            (setf (gethash key (gethash db *global-hashs*)) value))))
-    (return-hash-string value))
-  
+    value)
 
+;; Runaway memory loss 
 (defun get-global-hash (db key)
-  (let ((result (gethash key (gethash db *global-hashs*))))
-    (return-hash-string result)))
+  (progn
+    (if (not (gethash db *global-hashs*))
+      (setf (gethash db *global-hashs*) (make-hash-table :test 'equal)))
+    (let ((result (gethash key (gethash db *global-hashs*))))
+      result)))
+; (get-global-hash "alias" "test")
 
+(defun get-random-string (length &key (alphabetic nil) (numeric nil) (punctuation nil))
+  (assert (or alphabetic numeric))
+  (let ((alphabet nil))
+    (when alphabetic
+      (setf alphabet (append alphabet (concatenate 'list "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"))))
+    (when numeric
+      (setf alphabet (append alphabet (concatenate 'list "0123456789"))))
+    (when punctuation
+      (setf alphabet (append alphabet (concatenate 'list "!?;:\".,()-"))))
+    (setf alphabet (make-array (length alphabet) :element-type 'character :initial-contents alphabet))
+    (loop for i from 1 upto length
+       collecting (string (elt alphabet (random (length alphabet)))) into pass
+       finally (return (apply #'concatenate 'string pass)))))
+
+(defun create-random-hash-key (db)
+  (let ((random-string (get-random-string 10 :alphabetic t :numeric t)))
+    (if (gethash db *global-hashs*)
+      (if (nth-value 1 (gethash random-string (gethash db *global-hashs*)))
+        (create-random-hash-key db)
+        random-string)
+      random-string)))
+; (get-new-hash "page")
+; (get-new-hash "pagez")
+; (set-global-hash "alias" (get-new-hash "alias") "1")
 ; (set-global-hash "page" "123" "456")
 ; (get-global-hash "page" "123")
-; (get-global-hash "alias" "js")
+; (set-global-hash "alias" "s1BXk6uYeg" nil)
 ; (set-global-hash "page" "abc" "xyz")
 ; (set-global-hash "post" "098" "765")
 ; (maphash #'print-hash-entry *global-hashs*)
+; (maphash #'print-hash-entry (gethash "alias" *global-hashs*))
 ; (maphash #'print-hash-entry (gethash "page" *global-hashs*))
 ; (maphash #'print-hash-entry (gethash "post" *global-hashs*))
 
@@ -160,7 +194,7 @@
   (setf *id* (1+ *id*)))
 ; (get-id)
 
-(defun create-node (lst &optional id)
+(defun create-node (lst &optional id return-id)
   (progn
     (format *logs* "Creating a node: ~a ~%" lst)
     (if (null id)
@@ -172,11 +206,15 @@
                 (setf (gethash username *usernames*) id)
                 (setf lst (append lst (list :password password-hash)))))
           (push (list id (append lst (list :id id) (list :created-date (timestamp-to-unix (now))))) *nodes*)
-          (concatenate 'string "{\"id\":" (write-to-string id) "}"))
+          (if (not return-id)
+            (concatenate 'string "{\"id\":" (write-to-string id) "}")
+            id))
         (progn
           (push (list id lst) *nodes*)
-          (concatenate 'string "{\"id\":" (write-to-string id) "}")))))
-; (create-node '(:type "project" :title "Project Title"))
+          (if (not return-id)
+          (concatenate 'string "{\"id\":" (write-to-string id) "}")
+          id)))))
+; (create-node '(:type "project" :title "Project Title") nil t)
 ; (create-node '(:type "task" :title "Task Title"))
 ; (create-node '(:type "user" :username "nate" :password "fun"))
 ; (getf (get-node "9") :create-date)
@@ -513,8 +551,7 @@
 (setf (gethash "anonymous" *user-permissions*) '(view (node (all)
                                                        edge (all)
                                                        hash (all))
-                                                 create (node ("comment") hash (all))
-                                                 op (mail (all) echo (all))))
+                                                 create (node ("comment") hash (all))))
 
 (setf (gethash "logged-in" *user-permissions*) '(view (node (all) 
                                                        edge (all)
@@ -558,7 +595,7 @@
            (setf user '(:username "logged-in")))
           (t (setf user '(:username "admin"))))
     (format *logs* "User: ~a~%" user)
-    (cond ((or (equal verb "login"))
+    (cond ((or (equal verb "login") (equal verb "op"))
            (prog1
              ,@body
              (save-data)))
@@ -630,74 +667,78 @@
     (if (not (getf params :id)) ; (not (getf '(:ID 5) :id))
       (nodes->list (view-node :type (getf params :type) :limit limit))
       (nodes->list (view-node :id (getf params :id))))))
-
 ; (setf *operations* '(or)) 
+
+;; Routing
+(defun reset-routes ()
+  (setf *operations* '()))
 
 (defun insert-op (op)
   (setf *operations* (append *operations* op)))
+; *operations*
+; (setf *operations* '())
 
-; (insert-op (create-op "mail" "mail"))
+(defun create-op (noun fn-obj)
+     (and (not (equal "initialize" noun))
+       (insert-op `((,noun ,fn-obj)))))
+; (create-op "mail" (print "mail"))
+; (create-op "echo" (getf params :value))
 
-(defun create-op (noun &rest body)
-  (insert-op `((if (equal noun ,noun)
-    ,@body))))
-
+(defun post-request (route params)
+  (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
+         (verb (car path-elms))
+         (noun (cadr path-elms)))
+    (format *logs* "~%POST REQUEST: ~a ~a ~a~%" route params path-elms)
+    (check-permissions verb noun params
+                       (or 
+                         (if (equal verb "login")
+                           (login-user params))
+                         (if (equal verb "op")
+                             (let ((result '()))
+                               (dolist (op *operations* result)
+                                 (let ((noun-match (car op))
+                                       (fn-obj (cadr op)))
+                                   (format *logs* "op result: ~A~%" (funcall #'equal noun noun-match))
+                                   (and (funcall #'equal noun noun-match) 
+                                        (setf result (funcall fn-obj params)))))))
+                         (if (equal verb "view")
+                           (cond 
+                             ((equal noun "node")
+                              (let ((node (nodes->json (view-node-request params))))
+                                (cond ((getf params :id)
+                                       ;; (nodes->json (view-node-request '(:id 31)))
+                                       ;; (nodes->json (view-node-request '(:type "comment")))
+                                       (if (not (or (equal node "[{}]") (equal node "[]")))
+                                         (add-edge-to-json node (get-edges->json (getf params :id)))
+                                         ""))
+                                      (t node))))
+                             ((equal noun "hash")
+                              (return-hash-string (get-global-hash (getf params :db) (getf params :key))))
+                             ; (return-hash-string (get-global-hash "alias" "gragra"))
+                             ((equal noun "edge")
+                              (get-edges->json (getf params :id)))))
+                         (if (or (equal verb "delete") (equal verb "remove"))
+                           (cond ((equal noun "node")
+                                  (delete-node (getf params :id)))) 
+                           (cond ((equal noun "edge")
+                                  (n-delete-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))
+                         (if (equal verb "save")
+                           (cond ((equal noun "node")
+                                  (save-node (getf params :id) params))))
+                         (if (equal verb "create")
+                           (cond ((equal noun "node")
+                                  (format *logs* "Creating node~%")
+                                  (create-node params))
+                                 ((equal noun "hash")
+                                  (format *logs* "Creating hash")
+                                  (return-hash-string (set-global-hash (getf params :db) (getf params :key) (getf params :value))))
+                                 ((equal noun "edge")
+                                  (format *logs* "Creating edge~%")
+                                  (create-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))))))
+     
 ; (create-op "mail" "sending mail")
 ; (create-op "echo" (getf params :value))
 
-(defmacro get-ops ()
-  *operations*)
-
-; *operations*
-
-; (cond *operations*)
-; (get-ops)
-; (eval)
-
-(defun post-request (route params)
-   (let* ((path-elms (cl-utilities:split-sequence #\/ route :remove-empty-subseqs t))
-          (verb (car path-elms))
-          (noun (cadr path-elms)))
-     (format *logs* "~%POST REQUEST: ~a ~a ~a~%" route params path-elms)
-     (check-permissions verb noun params
-                      (or 
-                        (if (equal verb "login")
-                          (login-user params))
-                        (if (equal verb "op")
-                          (get-ops))
-                        (if (equal verb "view")
-                          (cond 
-                            ((equal noun "node")
-                             (let ((node (nodes->json (view-node-request params))))
-                               (cond ((getf params :id)
-                                     ;; (nodes->json (view-node-request '(:id 2)))
-                                     ;; (nodes->json (view-node-request '(:type "comment")))
-                                     (if (not (or (equal node "[{}]") (equal node "[]")))
-                                       (add-edge-to-json node (get-edges->json (getf params :id)))
-                                       ""))
-                                     (t node))))
-                            ((equal noun "hash")
-                             (get-global-hash (getf params :db) (getf params :key)))  
-                            ((equal noun "edge")
-                             (get-edges->json (getf params :id)))))
-                        (if (or (equal verb "delete") (equal verb "remove"))
-                          (cond ((equal noun "node")
-                                 (delete-node (getf params :id)))) 
-                          (cond ((equal noun "edge")
-                                 (n-delete-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))
-                        (if (equal verb "save")
-                          (cond ((equal noun "node")
-                                 (save-node (getf params :id) params))))
-                        (if (equal verb "create")
-                          (cond ((equal noun "node")
-                                   (format *logs* "Creating node~%")
-                                   (create-node params))
-                                ((equal noun "hash")
-                                   (format *logs* "Creating hash")
-                                   (set-global-hash (getf params :db) (getf params :key) (getf params :value)))
-                                ((equal noun "edge")
-                                   (format *logs* "Creating edge~%")
-                                   (create-edge (getf params :id) (getf params :to) :type (getf params :type) :direction :to))))))))
 
 ;;; Server io utilities 
 

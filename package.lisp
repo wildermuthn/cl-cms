@@ -9,6 +9,7 @@
         :cl-utilities)
   (:export :start-server
            :stop-server
+           :create-op
            :get-node
            :save-node
            :delete-node
